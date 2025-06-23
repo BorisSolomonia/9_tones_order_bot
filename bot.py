@@ -156,7 +156,15 @@ def update_google_sheet(data, author):
             str(author).strip()
         ]
         try:
-            sheet.append_row(row, value_input_option='USER_ENTERED')
+            sheet.append_rows([[
+                timestamp.strip(),
+                data['customer'].strip(),
+                data['product'].strip(),
+                data['amount_value'].strip(),
+                data['amount_unit'].strip(),
+                data['comment'].strip(),
+                author.strip()
+            ]], value_input_option='USER_ENTERED')
         except Exception as e:
             logging.error(f"Failed to write to sheet: {e}")
 
