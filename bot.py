@@ -1,7 +1,6 @@
 import logging
 import os
 import re
-import json
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -27,15 +26,20 @@ SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME")
 
 client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
-# Known lists
-KNOWN_PRODUCTS = [
-    "მცენარეული ცხიმი", "მაიონეზი", "ქათმის ნაგეთსი", "კარტოფილი ფრი", "ფიტურნიის ცხიმი", "პირობითი პროდუქტი", "ქათმის ფილე", "თევზი სიომგა", "პანგასიუსის ფილე", "ქათმის მკერდი", "მზესუმზირის ზეთი",
-    "ღორის ბარკალი", "ორაგულის ფილე", "სკუმბრია", "საქონლის ხორცი", "საქონლის ბარამანსა", "ძროხის ხორცი", "თევზი ხეკი", "ქათამი", "ქათმის ბარკალი", "ქათმის კროკეტი", "ქათმის კუჭი", "ქათმის ფრთა", "ქათმის ღვიძლი", "ღორის სუკი", "ღორის კისერი", "ღორის ჩალაღაჯი", "ღორის ნეკნი", "ფრიტურის ზეთი", "მექსიკური კარტოფილი", "ორაგული", "კეტჩუპი", "ქათმის ინერფილე", "საქონლის ხორცის სტეიკი", "თხევადი აირი", "ღორის ხორცი", "პიცის ყველი", "თევზი ტილაპიის ფილე", "ქათმის ფარში", "ღორის კანჭი", "კარტოფილი", "ღორის ბეჭი", "ბუნებრივი აირი", "თვითწებვადი ლენტა", "სტრეჩი", "ავტონაწილები", "თევზი ორაგული", "დიზელი","ხორცის დაჭრის მომსახურება"
-]
+# --- Load known lists from files ---
 
-KNOWN_CUSTOMERS = [
-    "ფუდსელი", "თეისთი", "დიღომი ჰუდი", "ნინო მუშკუდიანი", "ზემელი", "გიორგი რაზმაძე"
-]
+def load_list_from_file(filename):
+    try:
+        with open(filename, encoding='utf-8') as f:
+            return [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        logging.error(f"File not found: {filename}")
+        return []
+
+KNOWN_CUSTOMERS = load_list_from_file("known_customers.txt")
+KNOWN_PRODUCTS = load_list_from_file("known_products.txt")
+
+# --- Google Sheets Setup ---
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS_FILE, scope)
@@ -55,9 +59,13 @@ def extract_data_from_line(line):
     if match:
         customer_raw, product_raw, number, unit, comment = match.groups()
     else:
-        # Fallback: Try to extract only customer and product, mark others as unknown
+        # fallback if regex fails
         logging.warning(f"Regex did not match for line: {line}")
-        customer_raw, product_raw, number, unit, comment = line, "უცნობი პროდუქტი", "?", "", ""
+        customer_raw = line
+        product_raw = ""
+        number = "?"
+        unit = ""
+        comment = ""
 
     matched_customer = fuzzy_match(customer_raw, KNOWN_CUSTOMERS)
     matched_product = fuzzy_match(product_raw, KNOWN_PRODUCTS)
@@ -73,7 +81,9 @@ def extract_data_from_line(line):
         "amount_unit": unit or "",
         "comment": comment or "",
         "raw_customer": customer_raw,
-        "raw_product": product_raw
+        "raw_product": product_raw,
+        "customer_unknown": matched_customer is None,
+        "product_unknown": matched_product is None
     }
 
 def update_google_sheet(data, author):
@@ -107,12 +117,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if data:
                     update_google_sheet(data, author)
                     warn = ""
-                    if data['customer'] == data['raw_customer']:
-                        warn += " ⚠ უცნობი მომხმარებელი"
-                    if data['product'] == data['raw_product']:
-                        warn += " ⚠ უცნობი პროდუქტი"
+                    if data['customer_unknown']:
+                        warn += " ⚠️ უცნობი მომხმარებელი"
+                    if data['product_unknown']:
+                        warn += " ⚠️ უცნობი პროდუქტი"
                     await update.message.reply_text(
-                        f"✅ Logged: {data['customer']} / {data['product']} / {data['amount_value']}{data['amount_unit']}{warn}"
+                        f"✅ Logged: {data['raw_customer']} / {data['raw_product']} / {data['amount_value']} / {data['amount_unit']}{warn}"
                     )
                 else:
                     await update.message.reply_text(f"❌ Couldn't parse: {subline}")
