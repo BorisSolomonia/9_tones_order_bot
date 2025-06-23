@@ -34,7 +34,7 @@ KNOWN_PRODUCTS = [
 ]
 
 KNOWN_CUSTOMERS = [
-    "ფუდსელი", "თეისთი", "დიღომი ჰუდი", "ნინო მუშკუდიანი", "ზემელი", "გიორგი რაზმაძე" # trimmed for brevity
+    "ფუდსელი", "თეისთი", "დიღომი ჰუდი", "ნინო მუშკუდიანი", "ზემელი", "გიორგი რაზმაძე"
 ]
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -43,7 +43,7 @@ sheet = gspread.authorize(creds).open(SPREADSHEET_NAME).sheet1
 
 # --- UTILS ---
 
-def fuzzy_match(term, known_list, threshold=80):
+def fuzzy_match(term, known_list, threshold=50):
     match, score, _ = process.extractOne(term, known_list)
     logging.info(f"Matching '{term}' → '{match}' (score: {score})")
     return match if score >= threshold else None
