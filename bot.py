@@ -51,18 +51,24 @@ def fuzzy_match(term, known_list, threshold=50):
 def extract_data_from_line(line):
     line = line.strip()
     match = re.match(r"(.+?)\s*\.\s*(.+?)\s+(\d+)(კგ|ც)?\s*(.*)?", line)
-    if not match:
-        logging.warning(f"Regex did not match for line: {line}")
-        return None
 
-    customer_raw, product_raw, number, unit, comment = match.groups()
+    if match:
+        customer_raw, product_raw, number, unit, comment = match.groups()
+    else:
+        # Fallback: Try to extract only customer and product, mark others as unknown
+        logging.warning(f"Regex did not match for line: {line}")
+        customer_raw, product_raw, number, unit, comment = line, "უცნობი პროდუქტი", "?", "", ""
+
     matched_customer = fuzzy_match(customer_raw, KNOWN_CUSTOMERS)
     matched_product = fuzzy_match(product_raw, KNOWN_PRODUCTS)
 
+    customer = matched_customer if matched_customer else customer_raw
+    product = matched_product if matched_product else product_raw
+
     return {
         "type": "order",
-        "customer": matched_customer or customer_raw,
-        "product": matched_product or product_raw,
+        "customer": customer,
+        "product": product,
         "amount_value": number,
         "amount_unit": unit or "",
         "comment": comment or "",
