@@ -54,19 +54,18 @@ def fuzzy_match(term, known_list, threshold=50):
 
 def extract_data_from_line(line):
     line = line.strip()
-    match = re.match(r"(.+?)\s*\.\s*(.+?)\s+(\d+)(კგ|ც)?\s*(.*)?", line)
 
+    # Step 1: Try basic regex
+    match = re.match(r"(.+?)\s*\.\s*(\d+)(კგ|ც|ლ|გრამი)?\s+(.+?)(?:[,;]\s*(.*))?$", line)
     if match:
-        customer_raw, product_raw, number, unit, comment = match.groups()
+        customer_raw, number, unit, product_raw, comment = match.groups()
+        comment = comment or ""
     else:
         # fallback if regex fails
         logging.warning(f"Regex did not match for line: {line}")
-        customer_raw = line
-        product_raw = ""
-        number = "?"
-        unit = ""
-        comment = ""
+        return call_gpt_fallback(line)
 
+    # Step 2: Fuzzy match
     matched_customer = fuzzy_match(customer_raw, KNOWN_CUSTOMERS)
     matched_product = fuzzy_match(product_raw, KNOWN_PRODUCTS)
 
@@ -79,12 +78,70 @@ def extract_data_from_line(line):
         "product": product,
         "amount_value": number,
         "amount_unit": unit or "",
-        "comment": comment or "",
+        "comment": comment,
         "raw_customer": customer_raw,
         "raw_product": product_raw,
         "customer_unknown": matched_customer is None,
         "product_unknown": matched_product is None
     }
+def call_gpt_fallback(text):
+    logging.warning(f"Using GPT fallback for: {text}")
+    try:
+        customer_str = ", ".join(KNOWN_CUSTOMERS)
+        product_str = ", ".join(KNOWN_PRODUCTS)
+
+        prompt = f"""
+        Given the Georgian text order, extract the following:
+        - Customer (must match these): {customer_str}
+        - Product (must match these): {product_str}
+        - Amount value and unit
+        - Comment if available
+
+        Format response as JSON:
+        {{
+            "customer": "XXX",
+            "product": "YYY",
+            "amount_value": "ZZ",
+            "amount_unit": "კგ|ც|ლ|გრამი",
+            "comment": "..."
+        }}
+
+        If matching fails, return raw values from the message.
+        Text: "{text}"
+        """
+
+        response = client_ai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that extracts structured order data."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        content = response.choices[0].message.content.strip()
+        parsed = json.loads(content)
+
+        parsed["type"] = "order"
+        parsed["raw_customer"] = parsed.get("customer", "")
+        parsed["raw_product"] = parsed.get("product", "")
+        parsed["customer_unknown"] = parsed["customer"] not in KNOWN_CUSTOMERS
+        parsed["product_unknown"] = parsed["product"] not in KNOWN_PRODUCTS
+
+        return parsed
+
+    except Exception as e:
+        logging.error(f"GPT parsing failed: {e}")
+        return {
+            "type": "order",
+            "customer": text,
+            "product": "",
+            "amount_value": "?",
+            "amount_unit": "",
+            "comment": "",
+            "raw_customer": text,
+            "raw_product": "",
+            "customer_unknown": True,
+            "product_unknown": True
+        }
 
 def update_google_sheet(data, author):
     if data['type'] == 'order':
@@ -122,8 +179,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if data['product_unknown']:
                         warn += " ⚠️ უცნობი პროდუქტი"
                     await update.message.reply_text(
-                        f"✅ Logged: {data['raw_customer']} / {data['raw_product']} / {data['amount_value']} / {data['amount_unit']}{warn}"
+                        f"✅ Logged: {data['raw_customer']} / {data['raw_product']} / {data['amount_value']} / {data['amount_unit']}"
+                        + (" ⚠️ უცნობი მომხმარებელი" if data['customer_unknown'] else "")
+                        + (" ⚠️ უცნობი პროდუქტი" if data['product_unknown'] else "")
                     )
+
                 else:
                     await update.message.reply_text(f"❌ Couldn't parse: {subline}")
 
