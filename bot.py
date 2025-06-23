@@ -90,13 +90,13 @@ def update_google_sheet(data, author):
     if data['type'] == 'order':
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([
-            timestamp,
-            data['customer'],
-            data['product'],
-            data['amount_value'],
-            data['amount_unit'],
-            data['comment'],
-            author
+            timestamp.strip(),
+            data['customer'].strip(),
+            data['product'].strip(),
+            data['amount_value'].strip(),
+            data['amount_unit'].strip(),
+            data['comment'].strip(),
+            author.strip()
         ])
 
 # --- TELEGRAM ---
