@@ -146,27 +146,15 @@ def call_gpt_fallback(text):
 def update_google_sheet(data, author):
     if data['type'] == 'order':
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row = [
-            str(timestamp).strip(),
-            str(data['customer']).strip(),
-            str(data['product']).strip(),
-            str(data['amount_value']).strip(),
-            str(data['amount_unit']).strip(),
-            str(data['comment']).strip(),
-            str(author).strip()
-        ]
-        try:
-            sheet.append_rows([[
-                timestamp.strip(),
-                data['customer'].strip(),
-                data['product'].strip(),
-                data['amount_value'].strip(),
-                data['amount_unit'].strip(),
-                data['comment'].strip(),
-                author.strip()
-            ]], value_input_option='USER_ENTERED')
-        except Exception as e:
-            logging.error(f"Failed to write to sheet: {e}")
+        sheet.append_row([
+            timestamp,
+            data['customer'],
+            data['product'],
+            data['amount_value'],
+            data['amount_unit'],
+            data['comment'],
+            author
+        ])
 
 # --- TELEGRAM ---
 
