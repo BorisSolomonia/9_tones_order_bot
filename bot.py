@@ -1,27 +1,33 @@
 import logging
 import os
 import re
+import json
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from rapidfuzz import process
-import openai
+from openai import OpenAI
+from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import asyncio
 
 # --- SETUP ---
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+load_dotenv()
 
-TELEGRAM_TOKEN = "TELEGRAM_BOT_KEY"
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_CREDENTIALS_FILE = "google-credentials.json"
-SPREADSHEET_NAME = "9tones_orders"
+SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME")
 
-openai.api_key = OPENAI_API_KEY
+client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
-# Known product and customer lists
+# Known lists
 KNOWN_PRODUCTS = [
     "მცენარეული ცხიმი",    "მაიონეზი",    "ქათმის ნაგეთსი",    "კარტოფილი ფრი",    "ფიტურნიის ცხიმი",    "პირობითი პროდუქტი",    "ქათმის ფილე",    "თევზი სიომგა",    "პანგასიუსის ფილე",    "ქათმის მკერდი",    "მზესუმზირის ზეთი",
     "ღორის ბარკალი",    "ორაგულის ფილე",    "სკუმბრია",    "საქონლის ხორცი",    "საქონლის ბარამანსა",    "ძროხის ხორცი",    "თევზი ხეკი",    "ქათამი",    "ქათმის ბარკალი",    "ქათმის კროკეტი",    "ქათმის კუჭი",    "ქათმის ფრთა",    "ქათმის ღვიძლი",    "ღორის სუკი",    "ღორის კისერი",    "ღორის ჩალაღაჯი",    "ღორის ნეკნი",    "ფრიტურის ზეთი",    "მექსიკური კარტოფილი",    "ორაგული",    "კეტჩუპი",    "ქათმის ინერფილე",    "საქონლის ხორცის სტეიკი",    "თხევადი აირი", "ღორის ხორცი", "პიცის ყველი",    "თევზი ტილაპიის ფილე",    "ქათმის ფარში",    "ღორის კანჭი",    "კარტოფილი",    "ღორის ბეჭი",    "ბუნებრივი აირი",    "თვითწებვადი ლენტა",    "სტრეჩი", "ავტონაწილები", "თევზი ორაგული", "დიზელი","ხორცის დაჭრის მომსახურება"
@@ -116,10 +122,9 @@ KNOWN_CUSTOMERS = [
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS_FILE, scope)
-client = gspread.authorize(creds)
-sheet = client.open(SPREADSHEET_NAME).sheet1
+sheet = gspread.authorize(creds).open(SPREADSHEET_NAME).sheet1
 
-# --- FUNCTIONS ---
+# --- UTILS ---
 
 def fuzzy_match(term, known_list, threshold=80):
     match, score, _ = process.extractOne(term, known_list)
@@ -127,72 +132,65 @@ def fuzzy_match(term, known_list, threshold=80):
 
 def extract_data_from_line(line):
     line = line.strip()
-    # Format: Customer. Product Quantity Comment (optional)
     match = re.match(r"(.+?)\s*\.\s*(.+?)\s+(\d+)(კგ|ც)?\s*(.*)?", line)
     if not match:
         return None
 
     customer_raw, product_raw, number, unit, comment = match.groups()
-    customer = fuzzy_match(customer_raw, KNOWN_CUSTOMERS)
-    product = fuzzy_match(product_raw, KNOWN_PRODUCTS)
-    amount = f"{number} {unit}".strip() if number else ""
+    matched_customer = fuzzy_match(customer_raw, KNOWN_CUSTOMERS)
+    matched_product = fuzzy_match(product_raw, KNOWN_PRODUCTS)
 
-    if customer and product:
-        return {
-            "type": "order",
-            "customer": customer,
-            "product": product,
-            "amount": amount,
-            "comment": comment or ""
-        }
-    return call_gpt_for_parsing(line)
-
-def call_gpt_for_parsing(text):
-    prompt = f"""
-    The following text is a Georgian order message. Extract and return the customer name, product name, quantity, and optional comment.
-    Text: "{text}"
-    Return JSON like: {{"type": "order", "customer": "ჟღენტი", "product": "პერედინა", "amount": "30კგ", "comment": ""}}
-    """
-
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant that extracts structured Georgian order data."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    try:
-        parsed = eval(response['choices'][0]['message']['content'])
-        return parsed
-    except Exception as e:
-        logging.error(f"GPT parsing failed: {e}")
-        return None
+    return {
+        "type": "order",
+        "customer": matched_customer or customer_raw,
+        "product": matched_product or product_raw,
+        "amount_value": number,
+        "amount_unit": unit or "",
+        "comment": comment or "",
+        "raw_customer": customer_raw,
+        "raw_product": product_raw
+    }
 
 def update_google_sheet(data, author):
     if data['type'] == 'order':
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([date_str, data['customer'], data['product'], data['amount'], data['comment'], author])
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([
+            timestamp,
+            data['customer'],
+            data['product'],
+            data['amount_value'],
+            data['amount_unit'],
+            data['comment'],
+            author
+        ])
 
-# --- TELEGRAM HANDLERS ---
+# --- TELEGRAM ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! Send me an order message and I will log it to Google Sheets.")
+    await update.message.reply_text("Welcome! Send me an order and I’ll log it to Google Sheets.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     author = update.message.from_user.full_name or update.message.from_user.username or str(update.message.from_user.id)
     lines = text.split('\n')
+
     for line in lines:
-        # Handle multiple orders in one line, split by ; or ,
         for subline in re.split(r'[;,]', line):
             subline = subline.strip()
             if subline:
                 data = extract_data_from_line(subline)
                 if data:
                     update_google_sheet(data, author)
-                    await update.message.reply_text(f"✅ Logged: {data}")
+                    warn = ""
+                    if data['customer'] == data['raw_customer']:
+                        warn += " ⚠ უცნობი მომხმარებელი"
+                    if data['product'] == data['raw_product']:
+                        warn += " ⚠ უცნობი პროდუქტი"
+                    await update.message.reply_text(
+                        f"✅ Logged: {data['customer']} / {data['product']} / {data['amount_value']}{data['amount_unit']}{warn}"
+                    )
                 else:
-                    await update.message.reply_text(f"❌ Couldn't understand: {subline}")
+                    await update.message.reply_text(f"❌ Couldn't parse: {subline}")
 
 # --- MAIN ---
 
@@ -204,4 +202,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
